@@ -21,32 +21,44 @@ df = spark.read.format("csv") \
     .load(file_path)
 print(df.columns)
 df.printSchema()
+#%%
 
+# ==== LIMPEZA E FORMATAÇÃO DOS DADOS ====
 df = df.withColumn('rank', F.expr("try_cast(rank as double)")) \
        .withColumn('streams', F.expr("try_cast(streams as double)")) \
-       .dropna(subset=['rank', 'streams'])
-
+       .withColumn('region', F.trim(F.col('region'))) \
+       .dropna(subset=['rank', 'streams', 'artist', 'region'])
 df.printSchema()
+#%%
+
+# ==== ESCOLHA ENTRE SAMPLING OU DATASET COMPLETO ====
+user_input = input("Proceder para análise com todos os dados ou amostra? (todos/amostra): ").strip().lower()
+if user_input == 'amostra':
+    df = df.orderBy(F.rand()).limit(5000)
+    print("Usando amostra de 5000 linhas para análise.")
+else:
+    print("Usando todos os dados para análise.")
+#%%
 
 # ==== AGREGAÇÃO ====
-features = df.groupBy('title', 'artist').agg(
-    F.mean('streams').alias('streams_mean'),
-    F.max('streams').alias('streams_max'),
-    F.stddev('streams').alias('streams_std'),
-    F.mean('rank').alias('rank_mean'),
-    F.min('rank').alias('rank_best'),
+features = df.groupBy('artist').agg(
+    F.mean('streams').alias('artist_streams_mean'),
+    F.min('streams').alias('artist_streams_min'),
+    F.max('streams').alias('artist_streams_max'),
+    F.stddev('streams').alias('artist_streams_std'),
+    #F.mean('rank').alias('rank_mean'), -- acho que não faz muito sentido visto que pode ter mais de uma música
+    F.min('rank').alias('artist_rank_best'),
     F.countDistinct('region').alias('n_regions'),
     F.count('*').alias('n_appearances')
 )
-
 features.show(10)
 #%%
 
 # Separando as principais features que irão ser usadas e preenchendo NA com 0 
 features = features.fillna(0)
 
-feature_cols = ['streams_mean', 'streams_max', 'streams_std', 
-                'rank_mean', 'rank_best', 'n_regions', 'n_appearances']
+feature_cols = ['artist_streams_mean', 'artist_streams_min', 'artist_streams_max',
+                'artist_rank_best','n_appearances', 'n_regions']
 
 
 # Transformando as features em vetores
@@ -109,8 +121,8 @@ features_clustered = model.transform(features)
 
 cluster_stats = features_clustered.groupBy('prediction').agg(
     F.count('*').alias('count'),
-    F.mean('streams_mean').alias('avg_streams_mean'),
-    F.mean('rank_best').alias('avg_rank_best'),
+    F.mean('artist_streams_mean').alias('avg_streams_mean'),
+    F.mean('artist_rank_best').alias('avg_rank_best'),
     F.mean('n_regions').alias('avg_n_regions'),
     F.mean('n_appearances').alias('avg_n_appearances')
 ).orderBy('prediction')
@@ -131,10 +143,13 @@ for i in range(k_optimal):
 
 # A conversão para pandas é apenas para facilitar a visualização
 # Apenas os dados necessários para não sobrecarregar memória
+
 features_pd = features_clustered.select(
-    'title', 'artist', 'prediction',
-    *feature_cols
+    'artist', 'prediction', *feature_cols
 ).toPandas()
+
+# Garantir que não há valores nulos que atrapalhem o PCA
+features_pd = features_pd.dropna(subset=feature_cols)
 
 # Fazendo PCA
 
@@ -163,6 +178,10 @@ PC1 (horizontal, 98.7%): Captura quase TODA a diferença entre músicas
 PC2 (vertical, 1.1%): Captura pequenas variações adicionais
 '''
 
+
+## Creio que Análise poderia terminar aqui, visto que já temos duas técnicas de ML não supervisionadas aplicadas, Kmeans e PCA.
+
+'''
 df_with_clusters = df.join(
     features_clustered.select('title', 'artist', 'prediction'),
     on=['title', 'artist'],
@@ -184,4 +203,4 @@ print("Arquivo salvo: spotify_com_clusters.parquet")
 # salvar apenas as features com clusters
 features_clustered.write.mode('overwrite').parquet('../data/output/spotify_features_clusters.parquet')
 print("Features salvas: spotify_features_clusters.parquet")
-# %%
+'''
