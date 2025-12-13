@@ -1,3 +1,4 @@
 *.csv
 /labs_venv
 charts.csv:Zone.Identifier
+.venv/
